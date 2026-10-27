@@ -1,0 +1,803 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>整点休息提醒</title>
+<style>
+:root{
+  --bg:#F4F6F8; --card:#FFFFFF; --text:#1F2328; --muted:#65707C;
+  --accent:#185FA5; --accent-dark:#0C447C; --accent-soft:#E6F1FB;
+  --border:#E3E7EB; --ok:#1D9E75; --warn:#BA7517; --danger:#C0392B;
+  --radius:12px;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{
+  background:var(--bg); color:var(--text); min-height:100vh;
+  font:400 14px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+  -webkit-font-smoothing:antialiased;
+  padding:32px 20px 120px;
+}
+body.locked{overflow:hidden}
+.wrap{max-width:780px;margin:0 auto}
+
+header{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:22px}
+.brand{display:flex;align-items:center;gap:12px}
+.logo{
+  width:40px;height:40px;border-radius:11px;background:var(--accent);
+  display:flex;align-items:center;justify-content:center;flex:0 0 40px;
+}
+.logo svg{display:block}
+h1{font-size:18px;font-weight:500;letter-spacing:-.2px}
+.sub{font-size:12.5px;color:var(--muted);margin-top:1px}
+
+.switch{display:flex;align-items:center;gap:9px;cursor:pointer;user-select:none}
+.switch span{font-size:13px;color:var(--muted)}
+.switch input{display:none}
+.track{
+  width:42px;height:24px;border-radius:12px;background:#CBD3DA;
+  position:relative;transition:background .18s;flex:0 0 42px;
+}
+.track::after{
+  content:"";position:absolute;top:3px;left:3px;width:18px;height:18px;
+  border-radius:50%;background:#fff;transition:transform .18s;
+}
+.switch input:checked + .track{background:var(--ok)}
+.switch input:checked + .track::after{transform:translateX(18px)}
+
+.card{
+  background:var(--card);border:1px solid var(--border);border-radius:var(--radius);
+  padding:18px 20px;margin-bottom:14px;
+}
+.card > h2{
+  font-size:13px;font-weight:500;color:var(--muted);letter-spacing:.3px;
+  text-transform:uppercase;margin-bottom:14px;
+}
+
+.statline{display:flex;align-items:flex-start;justify-content:space-between;gap:20px;flex-wrap:wrap}
+.next-label{font-size:12.5px;color:var(--muted);margin-bottom:5px}
+.next-time{
+  font-size:30px;font-weight:500;letter-spacing:-1px;line-height:1.2;
+  font-variant-numeric:tabular-nums;color:var(--accent-dark);
+}
+.next-time.off{color:var(--muted);font-size:20px}
+.countdown{font-size:13px;color:var(--muted);margin-top:3px;font-variant-numeric:tabular-nums}
+.nextmsg{
+  font-size:12.5px;color:var(--muted);margin-top:7px;max-width:38em;
+  padding-left:9px;border-left:2px solid var(--accent-soft);
+}
+.badge{
+  display:inline-flex;align-items:center;gap:6px;font-size:12px;
+  padding:4px 11px;border-radius:20px;background:var(--accent-soft);color:var(--accent-dark);
+  white-space:nowrap;
+}
+.badge.off{background:#EEF1F4;color:var(--muted)}
+.badge .dot{width:6px;height:6px;border-radius:50%;background:currentColor}
+
+.points{margin-top:16px;padding-top:14px;border-top:1px dashed var(--border)}
+.points-title{font-size:12px;color:var(--muted);margin-bottom:9px}
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+.chip{
+  font:400 12px/1 ui-monospace,Consolas,monospace;
+  padding:5px 9px;border-radius:6px;background:var(--accent-soft);color:var(--accent-dark);
+  font-variant-numeric:tabular-nums;
+}
+.chip.past{background:#F0F2F4;color:#A3ACB5}
+
+/* ---- 位置九宫格（在弹窗里） ---- */
+.posgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.poscell{
+  position:relative;display:flex;flex-direction:column;align-items:center;gap:6px;
+  padding:9px 4px 7px;border:1px solid var(--border);border-radius:9px;
+  background:#FBFCFD;cursor:pointer;transition:.15s;
+  font-size:11.5px;color:var(--muted);line-height:1;
+}
+.poscell:hover{border-color:#CBD3DA;background:#F5F8FA}
+.poscell input{position:absolute;opacity:0;pointer-events:none}
+.poscell .mini{
+  width:56px;height:34px;border-radius:5px;background:#EDF0F3;
+  position:relative;overflow:hidden;transition:background .15s;
+}
+.poscell .mini i{
+  position:absolute;display:block;width:22px;height:8px;border-radius:2px;
+  background:#C4CBD3;transition:background .15s;
+}
+.poscell.on{border-color:var(--accent);background:var(--accent-soft);color:var(--accent-dark);font-weight:500}
+.poscell.on .mini{background:#D3E4F5}
+.poscell.on .mini i{background:var(--accent)}
+
+.poscell[data-pos="top-left"]     .mini i{left:3px;top:3px}
+.poscell[data-pos="top-center"]   .mini i{left:50%;margin-left:-11px;top:3px}
+.poscell[data-pos="top-right"]    .mini i{right:3px;top:3px}
+.poscell[data-pos="middle-left"]  .mini i{left:3px;top:50%;margin-top:-4px}
+.poscell[data-pos="center"]       .mini i{left:50%;margin-left:-11px;top:50%;margin-top:-4px}
+.poscell[data-pos="middle-right"] .mini i{right:3px;top:50%;margin-top:-4px}
+.poscell[data-pos="bottom-left"]  .mini i{left:3px;bottom:3px}
+.poscell[data-pos="bottom-center"] .mini i{left:50%;margin-left:-11px;bottom:3px}
+.poscell[data-pos="bottom-right"] .mini i{right:3px;bottom:3px}
+
+/* ---- 时段 ---- */
+.win{
+  display:flex;flex-direction:column;gap:9px;padding:11px 12px;
+  border:1px solid var(--border);border-radius:9px;margin-bottom:10px;background:#FBFCFD;
+}
+.win-top{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+.win .no{
+  flex:0 0 20px;height:20px;border-radius:6px;background:var(--accent-soft);
+  color:var(--accent-dark);font-size:11.5px;font-weight:500;
+  display:flex;align-items:center;justify-content:center;
+}
+.win input[type=time]{
+  font:inherit;font-size:13.5px;padding:5px 8px;border:1px solid var(--border);
+  border-radius:7px;background:#fff;color:var(--text);width:114px;
+  font-variant-numeric:tabular-nums;transition:opacity .15s;
+}
+.win input[type=time].dim{opacity:.4}
+.win input[type=time]:focus,select:focus,input[type=text]:focus,textarea:focus{
+  outline:none;border-color:var(--accent);box-shadow:0 0 0 3px rgba(24,95,165,.1);
+}
+.win .sep{color:var(--muted);font-size:13px}
+.win select{
+  font:inherit;font-size:13px;padding:6px 8px;border:1px solid var(--border);
+  border-radius:7px;background:#fff;color:var(--text);cursor:pointer;
+}
+.grow{flex:1}
+.win .try{
+  border:1px solid #B9D3EC;background:#fff;color:var(--accent);cursor:pointer;
+  font:inherit;font-size:12.5px;padding:5px 11px;border-radius:7px;transition:.15s;
+}
+.win .try:hover{background:var(--accent-soft);border-color:var(--accent)}
+.win .try:disabled{opacity:.5;cursor:default}
+.win .del{
+  border:0;background:none;color:var(--muted);cursor:pointer;
+  font-size:16px;line-height:1;padding:5px 7px;border-radius:6px;
+}
+.win .del:hover{background:#FDECEA;color:var(--danger)}
+.win-fields{display:grid;grid-template-columns:186px 1fr;gap:8px}
+.win .win-fields input{
+  width:100%;font:inherit;font-size:13px;padding:7px 10px;
+  border:1px solid var(--border);border-radius:7px;background:#fff;color:var(--text);
+}
+.win .win-fields input::placeholder{color:#A9B2BB}
+
+.btn{
+  font:inherit;font-size:13px;padding:7px 14px;border-radius:8px;cursor:pointer;
+  border:1px solid var(--border);background:#fff;color:var(--text);transition:.15s;
+}
+.btn:hover{background:#F7F9FA;border-color:#CBD3DA}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+.btn.primary:hover{background:var(--accent-dark);border-color:var(--accent-dark)}
+.btn.ghost{border-style:dashed;color:var(--accent);border-color:#B9D3EC}
+.btn.ghost:hover{background:var(--accent-soft);border-color:var(--accent)}
+.btn:disabled{opacity:.55;cursor:not-allowed}
+.btn.danger{color:#C0392B;border-color:#E6C8C2;margin-left:6px}
+.btn.danger:hover{background:#FDF2F0;border-color:#C0392B}
+.btn.sm{font-size:12.5px;padding:5px 12px}
+.runmeta{
+  font-size:11.5px;color:var(--muted);text-align:right;margin-top:7px;
+  line-height:1.6;font-variant-numeric:tabular-nums;
+}
+.runmeta b{font-weight:500;color:#47515C}
+
+label.field{display:block;margin-bottom:13px}
+label.field:last-child{margin-bottom:0}
+.field-name{display:block;font-size:12.5px;color:var(--muted);margin-bottom:5px}
+.field-name em{font-style:normal;color:#A9B2BB}
+input[type=text],textarea{
+  width:100%;font:inherit;font-size:13.5px;padding:8px 11px;border:1px solid var(--border);
+  border-radius:8px;background:#fff;color:var(--text);resize:vertical;
+}
+textarea{min-height:62px;line-height:1.55}
+
+/* ---- 设置行 ---- */
+.opt-row{
+  display:flex;align-items:center;gap:16px;padding:12px 0;
+  border-top:1px solid var(--border);
+}
+.opt-row:first-of-type{border-top:0;padding-top:0}
+.opt-row:last-of-type{padding-bottom:0}
+.opt-txt{flex:1;min-width:0}
+.opt-name{font-size:13.5px}
+.opt-desc{font-size:12px;color:var(--muted);margin-top:2px;line-height:1.55}
+.hint{font-size:12px;color:var(--muted);margin-top:9px;line-height:1.6}
+
+/* ---- 弹窗 ---- */
+.modal{position:fixed;inset:0;z-index:200;display:flex;align-items:center;justify-content:center;padding:20px}
+.modal[hidden]{display:none}
+.modal-mask{position:absolute;inset:0;background:rgba(23,32,42,.36)}
+.modal-card{
+  position:relative;background:#fff;border-radius:14px;width:100%;max-width:404px;
+  box-shadow:0 18px 48px rgba(16,24,40,.22);animation:pop .15s ease-out;
+}
+@keyframes pop{from{opacity:0;transform:translateY(7px) scale(.985)}to{opacity:1;transform:none}}
+.modal-head{display:flex;align-items:center;justify-content:space-between;padding:16px 18px 0}
+.modal-head h3{font-size:15px;font-weight:500}
+.modal-head .x{
+  border:0;background:none;font-size:20px;line-height:1;color:var(--muted);
+  cursor:pointer;padding:1px 7px;border-radius:6px;
+}
+.modal-head .x:hover{background:#F0F3F5;color:var(--text)}
+.modal-body{padding:15px 18px 4px}
+.modal-foot{display:flex;align-items:center;gap:9px;padding:14px 18px 16px}
+.modal-foot .spacer{flex:1}
+
+.bar{
+  position:sticky;bottom:0;margin:0 -20px -120px;padding:14px 20px;
+  background:rgba(244,246,248,.92);backdrop-filter:blur(8px);
+  border-top:1px solid var(--border);
+}
+.bar-inner{max-width:780px;margin:0 auto;display:flex;align-items:center;gap:10px}
+.spacer{flex:1}
+#msg{font-size:12.5px;color:var(--muted)}
+#msg.ok{color:var(--ok)}
+#msg.err{color:var(--danger)}
+
+@media (max-width:600px){
+  body{padding:20px 14px 110px}
+  h1{font-size:16px}
+  .next-time{font-size:26px}
+  .win-top{gap:7px}
+  .win input[type=time]{width:104px}
+  .grow{display:none}
+  .win-fields{grid-template-columns:1fr}
+  .bar-inner{flex-wrap:wrap}
+  .bar-inner .spacer{display:none}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div class="brand">
+      <div class="logo">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round">
+          <circle cx="12" cy="12" r="9"/><path d="M12 7.5V12l3 2"/>
+        </svg>
+      </div>
+      <div>
+        <h1>整点休息提醒</h1>
+        <div class="sub">到点弹自绘提醒卡片，位置和文案都能改</div>
+      </div>
+    </div>
+    <label class="switch" title="总开关">
+      <span id="enabledText">已开启</span>
+      <input type="checkbox" id="enabled">
+      <span class="track"></span>
+    </label>
+  </header>
+
+  <section class="card">
+    <div class="statline">
+      <div>
+        <div class="next-label">下一次提醒</div>
+        <div class="next-time" id="nextTime">—</div>
+        <div class="countdown" id="countdown"></div>
+        <div class="nextmsg" id="nextMsg" hidden></div>
+      </div>
+      <div>
+        <span class="badge" id="statusBadge"><span class="dot"></span><span id="statusText">加载中</span></span>
+        <div class="runmeta" id="runMeta"></div>
+      </div>
+    </div>
+    <div class="points">
+      <div class="points-title">今天的提醒时刻（已过的时间会变灰）</div>
+      <div class="chips" id="chips"></div>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>提醒时段与提示内容</h2>
+    <div id="wins"></div>
+    <button class="btn ghost" id="addWin" type="button">+ 添加时段</button>
+    <div class="hint">
+      时段的开始和结束两端都包含。例如「09:00 至 11:00，每 60 分钟」会提醒 09:00、10:00、11:00 共 3 次。<br>
+      频次选「仅一次」就只在开始时刻提醒一次，适合「10 点提醒我去开会」这种一次性的事。<br>
+      每个时段的标题、内容都可以单独填；留空就用下面的默认文案。都不填标题时，弹窗里只显示内容。
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>默认提示内容</h2>
+    <label class="field">
+      <span class="field-name">标题 <em>（可留空，留空则弹窗不显示标题）</em></span>
+      <input type="text" id="title" maxlength="40" placeholder="例如：该休息了">
+    </label>
+    <label class="field">
+      <span class="field-name">正文</span>
+      <textarea id="message" maxlength="100" placeholder="站起来活动一下……"></textarea>
+    </label>
+    <div class="hint">没有单独填写内容的时段会用这里的文案。正文最多 100 字，卡片高度会随行数自动变化。</div>
+  </section>
+
+  <section class="card">
+    <h2>其他设置</h2>
+
+    <div class="opt-row">
+      <div class="opt-txt">
+        <div class="opt-name">只在工作日提醒</div>
+        <div class="opt-desc">跳过周六、周日</div>
+      </div>
+      <label class="switch"><input type="checkbox" id="weekdaysOnly"><span class="track"></span></label>
+    </div>
+
+    <div class="opt-row">
+      <div class="opt-txt">
+        <div class="opt-name">开机自动启动</div>
+        <div class="opt-desc" id="autoStartDesc">登录 Windows 后在后台静默运行，不弹浏览器</div>
+      </div>
+      <label class="switch"><input type="checkbox" id="autoStart"><span class="track"></span></label>
+    </div>
+
+    <div class="opt-row">
+      <div class="opt-txt">
+        <div class="opt-name">弹窗位置</div>
+        <div class="opt-desc" id="posDesc">屏幕正中</div>
+      </div>
+      <button class="btn sm" id="posBtn" type="button">设置…</button>
+    </div>
+  </section>
+
+</div>
+
+<div class="bar">
+  <div class="bar-inner">
+    <span id="msg"></span>
+    <span class="spacer"></span>
+    <button class="btn" id="testBtn" type="button">弹一条试试</button>
+    <button class="btn primary" id="saveBtn" type="button">保存配置</button>
+    <button class="btn danger" id="quitBtn" type="button">退出程序</button>
+  </div>
+</div>
+
+<!-- 弹窗位置：不常用，收进设置弹窗里，别占着主页面 -->
+<div class="modal" id="posModal" hidden>
+  <div class="modal-mask" data-close="1"></div>
+  <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="posModalTitle">
+    <div class="modal-head">
+      <h3 id="posModalTitle">弹窗位置</h3>
+      <button class="x" type="button" data-close="1" title="关闭">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div class="posgrid" id="posGrid">
+        <label class="poscell" data-pos="top-left"><input type="radio" name="pos" value="top-left"><span class="mini"><i></i></span><span>左上</span></label>
+        <label class="poscell" data-pos="top-center"><input type="radio" name="pos" value="top-center"><span class="mini"><i></i></span><span>上中</span></label>
+        <label class="poscell" data-pos="top-right"><input type="radio" name="pos" value="top-right"><span class="mini"><i></i></span><span>右上</span></label>
+        <label class="poscell" data-pos="middle-left"><input type="radio" name="pos" value="middle-left"><span class="mini"><i></i></span><span>左中</span></label>
+        <label class="poscell" data-pos="center"><input type="radio" name="pos" value="center"><span class="mini"><i></i></span><span>正中</span></label>
+        <label class="poscell" data-pos="middle-right"><input type="radio" name="pos" value="middle-right"><span class="mini"><i></i></span><span>右中</span></label>
+        <label class="poscell" data-pos="bottom-left"><input type="radio" name="pos" value="bottom-left"><span class="mini"><i></i></span><span>左下</span></label>
+        <label class="poscell" data-pos="bottom-center"><input type="radio" name="pos" value="bottom-center"><span class="mini"><i></i></span><span>下中</span></label>
+        <label class="poscell" data-pos="bottom-right"><input type="radio" name="pos" value="bottom-right"><span class="mini"><i></i></span><span>右下</span></label>
+      </div>
+      <div class="hint" style="margin-top:12px">
+        九个位置都按「工作区」计算，会自动避开任务栏；贴边的位置留 24px 边距。<br>
+        选好可以点「预览效果」立刻在桌面上弹一张卡片看看。
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn" id="posCancel" type="button">取消</button>
+      <span class="spacer"></span>
+      <button class="btn" id="posPreview" type="button">预览效果</button>
+      <button class="btn primary" id="posApply" type="button">应用</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+  var $ = function(id){ return document.getElementById(id); };
+  // 0 是特殊值：仅一次（只在时段开始时刻提醒）
+  var INTERVALS = [0,5,10,15,20,30,45,60,90,120,180];
+  var POS_SHORT = {'top-left':'左上','top-center':'上中','top-right':'右上',
+                   'middle-left':'左中','center':'正中','middle-right':'右中',
+                   'bottom-left':'左下','bottom-center':'下中','bottom-right':'右下'};
+  var POS_FULL = {'top-left':'屏幕左上角','top-center':'屏幕顶部居中','top-right':'屏幕右上角',
+                  'middle-left':'屏幕左侧居中','center':'屏幕正中','middle-right':'屏幕右侧居中',
+                  'bottom-left':'屏幕左下角','bottom-center':'屏幕底部居中','bottom-right':'屏幕右下角'};
+
+  var state = { cfg:null, nextAt:null, nextMessage:'', todayPoints:[], pid:0, port:0, startedMs:0 };
+  var posSnapshot = null; // 打开设置弹窗时的位置，取消时用来回滚
+
+  function esc(s){
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function(c){
+      return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
+    });
+  }
+  function pad(n){ return n < 10 ? '0' + n : '' + n; }
+
+  function say(text, kind){
+    var el = $('msg');
+    el.textContent = text || '';
+    el.className = kind || '';
+    if (text) {
+      clearTimeout(say._t);
+      say._t = setTimeout(function(){ el.textContent = ''; el.className = ''; }, 3400);
+    }
+  }
+
+  /* ---------- 时段列表 ---------- */
+  function intervalLabel(v){ return v === 0 ? '仅一次' : '每 ' + v + ' 分钟'; }
+
+  function intervalOptions(cur){
+    var list = INTERVALS.slice();
+    if (list.indexOf(cur) < 0) list.push(cur);   // 配置文件里可能是 7 这种非预设值
+    list.sort(function(a,b){ return a-b; });
+    return list.map(function(v){
+      return '<option value="' + v + '"' + (v === cur ? ' selected' : '') + '>' + intervalLabel(v) + '</option>';
+    }).join('');
+  }
+
+  function renderWins(){
+    var box = $('wins');
+    box.innerHTML = '';
+    if (!state.cfg.windows.length) {
+      box.innerHTML = '<div class="hint" style="margin:0 0 12px">还没有时段，添加一个才会有提醒。</div>';
+      return;
+    }
+    state.cfg.windows.forEach(function(w, i){
+      var div = document.createElement('div');
+      div.className = 'win';
+      var once = !(w.interval > 0);
+      div.innerHTML =
+        '<div class="win-top">' +
+          '<span class="no">' + (i + 1) + '</span>' +
+          '<input type="time" value="' + esc(w.start) + '" data-i="' + i + '" data-k="start" step="60">' +
+          '<span class="sep">至</span>' +
+          '<input type="time" class="end" value="' + esc(w.end) + '" data-i="' + i + '" data-k="end" step="60"' +
+            (once ? ' title="仅一次只提醒开始时刻，结束时间不影响提醒"' : '') + '>' +
+          '<select data-i="' + i + '" data-k="interval">' + intervalOptions(w.interval) + '</select>' +
+          '<span class="grow"></span>' +
+          '<button class="try" type="button" data-i="' + i + '" title="用这条内容弹一次">试一下</button>' +
+          '<button class="del" type="button" data-i="' + i + '" title="删除该时段">&times;</button>' +
+        '</div>' +
+        '<div class="win-fields">' +
+          '<input type="text" data-i="' + i + '" data-k="title" maxlength="40"' +
+            ' value="' + esc(w.title || '') + '" placeholder="标题，留空用默认">' +
+          '<input type="text" data-i="' + i + '" data-k="message" maxlength="100"' +
+            ' value="' + esc(w.message || '') + '" placeholder="提示内容，留空用默认">' +
+        '</div>';
+      if (once) div.querySelector('.end').classList.add('dim');
+      box.appendChild(div);
+    });
+  }
+
+  /* 事件委托：列表会整体重建，绑在容器上一劳永逸 */
+  function onEdit(e){
+    var el = e.target;
+    if (!el.dataset || el.dataset.k === undefined) return;
+    var i = +el.dataset.i, k = el.dataset.k, v = el.value;
+    if (k === 'interval') {
+      v = parseInt(v, 10);
+      if (isNaN(v)) v = 60;
+      // 仅一次时结束时间不影响提醒，灰掉给个视觉提示
+      var endEl = el.parentNode.querySelector('.end');
+      if (endEl) {
+        endEl.classList.toggle('dim', !(v > 0));
+        if (v > 0) endEl.removeAttribute('title');
+        else endEl.setAttribute('title', '仅一次只提醒开始时刻，结束时间不影响提醒');
+      }
+    }
+    state.cfg.windows[i][k] = v;
+  }
+  $('wins').addEventListener('input', onEdit);
+  $('wins').addEventListener('change', onEdit);
+
+  $('wins').addEventListener('click', function(e){
+    var t = e.target;
+    if (t.classList.contains('del')) {
+      state.cfg.windows.splice(+t.dataset.i, 1);
+      renderWins();
+    } else if (t.classList.contains('try')) {
+      var w = state.cfg.windows[+t.dataset.i];
+      popTest(w.title || '', w.message || '', t);
+    }
+  });
+
+  /* ---------- 位置九宫格（在设置弹窗里） ---------- */
+  function syncPosCells(){
+    var cur = state.cfg && state.cfg.position || 'center';
+    var cells = $('posGrid').querySelectorAll('.poscell');
+    Array.prototype.forEach.call(cells, function(cell){
+      var on = cell.dataset.pos === cur;
+      cell.classList.toggle('on', on);
+      cell.querySelector('input').checked = on;
+    });
+    $('posDesc').textContent = POS_FULL[cur] || cur;
+  }
+
+  $('posGrid').addEventListener('change', function(e){
+    if (e.target.name !== 'pos') return;
+    state.cfg.position = e.target.value;
+    syncPosCells();
+  });
+
+  function openPosModal(){
+    posSnapshot = (state.cfg && state.cfg.position) || 'center';
+    $('posModal').hidden = false;
+    document.body.classList.add('locked');
+    syncPosCells();
+    $('posApply').focus();
+  }
+
+  function closePosModal(revert){
+    if (revert && posSnapshot) {
+      state.cfg.position = posSnapshot;
+      syncPosCells();
+    }
+    $('posModal').hidden = true;
+    document.body.classList.remove('locked');
+    posSnapshot = null;
+    $('posBtn').focus();
+  }
+
+  $('posBtn').addEventListener('click', openPosModal);
+  $('posCancel').addEventListener('click', function(){ closePosModal(true); });
+  $('posModal').addEventListener('click', function(e){
+    if (e.target.dataset && e.target.dataset.close) closePosModal(true);
+  });
+  document.addEventListener('keydown', function(e){
+    if (e.key === 'Escape' && !$('posModal').hidden) closePosModal(true);
+  });
+
+  $('posPreview').addEventListener('click', function(){
+    popTest($('title').value.trim(), $('message').value.trim(), this);
+  });
+
+  $('posApply').addEventListener('click', async function(){
+    var ok = await save(true);
+    if (ok) { closePosModal(false); say('弹窗位置已改为' + (POS_SHORT[state.cfg.position] || state.cfg.position), 'ok'); }
+  });
+
+  /* ---------- 状态区 ---------- */
+  function renderStatus(){
+    var now = Date.now();
+    var nextEl = $('nextTime'), cdEl = $('countdown'), nmEl = $('nextMsg');
+
+    if (state.nextAt) {
+      var d = new Date(state.nextAt);
+      nextEl.textContent = pad(d.getHours()) + ':' + pad(d.getMinutes());
+      nextEl.classList.remove('off');
+      var diff = Math.max(0, d.getTime() - now);
+      var total = Math.floor(diff / 1000);
+      var h = Math.floor(total / 3600), m = Math.floor((total % 3600) / 60), s = total % 60;
+      cdEl.textContent = '还有 ' + (h > 0 ? h + ' 小时 ' : '') + m + ' 分 ' + pad(s) + ' 秒' +
+                         (d.toDateString() !== new Date().toDateString() ? '（不是今天）' : '');
+    } else {
+      nextEl.textContent = '今日已无提醒';
+      nextEl.classList.add('off');
+      cdEl.textContent = state.cfg && !state.cfg.enabled ? '提醒已关闭' : '';
+    }
+
+    if (state.nextMessage) {
+      nmEl.hidden = false;
+      nmEl.textContent = '下一次内容：' + state.nextMessage;
+    } else {
+      nmEl.hidden = true;
+    }
+
+    var chips = $('chips');
+    chips.innerHTML = '';
+    if (!state.todayPoints.length) {
+      chips.innerHTML = '<span class="hint" style="margin:0">今天没有可提醒的时刻</span>';
+    } else {
+      state.todayPoints.forEach(function(tp){
+        var parts = tp.split(':');
+        var t = new Date(); t.setHours(+parts[0], +parts[1], 0, 0);
+        var span = document.createElement('span');
+        span.className = 'chip' + (t.getTime() <= now ? ' past' : '');
+        span.textContent = tp;
+        chips.appendChild(span);
+      });
+    }
+  }
+
+  function renderBadge(){
+    var b = $('statusBadge'), t = $('statusText');
+    if (!state.cfg) return;
+    if (!state.cfg.enabled) {
+      b.className = 'badge off'; t.textContent = '已暂停';
+    } else if (state.nextAt) {
+      b.className = 'badge'; t.textContent = '运行中';
+    } else {
+      b.className = 'badge off'; t.textContent = '无提醒时段';
+    }
+  }
+
+  // 页面能打开就说明进程活着；这里再把 PID、端口、已运行时长摊开，
+  // 让用户随时能确认"我双击的那个程序确实在跑"，而不是靠猜。
+  function fmtUptime(sec){
+    if (sec < 60) return sec + ' 秒';
+    var m = Math.floor(sec / 60);
+    if (m < 60) return m + ' 分钟';
+    var h = Math.floor(m / 60);
+    return h + ' 小时 ' + (m % 60) + ' 分钟';
+  }
+
+  function renderRunMeta(){
+    var el = $('runMeta');
+    if (!el) return;
+    if (!state.pid) { el.textContent = ''; return; }
+    var sec = state.startedMs ? Math.max(0, Math.floor((Date.now() - state.startedMs) / 1000)) : 0;
+    el.innerHTML = 'PID <b>' + state.pid + '</b> · 端口 <b>' + state.port + '</b>' +
+                   '<br>已运行 ' + fmtUptime(sec);
+  }
+
+  function fillForm(){
+    var c = state.cfg;
+    $('enabled').checked = !!c.enabled;
+    $('enabledText').textContent = c.enabled ? '已开启' : '已暂停';
+    $('title').value = c.title || '';
+    $('message').value = c.message || '';
+    $('weekdaysOnly').checked = !!c.weekdaysOnly;
+    $('autoStart').checked = !!c.autoStart;
+    if (!c.position) c.position = 'center';
+    syncPosCells();
+    renderWins();
+  }
+
+  function collect(){
+    var c = JSON.parse(JSON.stringify(state.cfg));
+    c.enabled = $('enabled').checked;
+    c.autoStart = !!state.cfg.autoStart;
+    c.title = $('title').value.trim();
+    c.message = $('message').value.trim();
+    c.weekdaysOnly = $('weekdaysOnly').checked;
+    c.position = state.cfg.position || 'center';
+    return c;
+  }
+
+  async function loadConfig(){
+    var r = await fetch('/api/config');
+    state.cfg = await r.json();
+    if (!state.cfg.windows) state.cfg.windows = [];
+    // 兜底：老配置里万一段落字段缺失，别让下拉框和输入框渲染成 NaN / undefined
+    state.cfg.windows.forEach(function(w){
+      if (typeof w.interval !== 'number' || isNaN(w.interval) || w.interval < 0) w.interval = 60;
+      if (!w.start) w.start = '09:00';
+      if (!w.end) w.end = '11:00';
+    });
+    fillForm();
+  }
+
+  async function loadStatus(){
+    try {
+      var r = await fetch('/api/status');
+      var s = await r.json();
+      state.nextAt = s.nextAt || null;
+      state.nextMessage = s.nextMessage || '';
+      state.todayPoints = s.todayPoints || [];
+      state.pid = s.pid || 0;
+      state.port = s.port || 0;
+      if (typeof s.uptimeSec === 'number') state.startedMs = Date.now() - s.uptimeSec * 1000;
+      renderStatus();
+      renderBadge();
+      renderRunMeta();
+    } catch (e) { /* 服务重启中，忽略这一轮 */ }
+  }
+
+  // 返回 true/false 而不是抛异常：调用方（开关、弹窗里的「应用」）需要知道
+  // 到底存没存进去，好决定要不要把控件回滚。
+  async function save(silent){
+    var c = collect();
+    var btn = $('saveBtn');
+    btn.disabled = true;
+    try {
+      var r = await fetch('/api/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(c)
+      });
+      var res = await r.json();
+      if (!r.ok) throw new Error(res.error || '保存失败');
+      state.cfg = c;
+      fillForm();
+      await loadStatus();
+      if (!silent) say('已保存，新的时刻表和文案已生效', 'ok');
+      return true;
+    } catch (e) {
+      say(e.message, 'err');
+      return false;
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  /* 测试弹窗：把当前（可能还没保存的）内容直接发过去 */
+  async function popTest(title, message, btn){
+    var old = btn ? btn.textContent : null;
+    if (btn) { btn.disabled = true; btn.textContent = '…'; }
+    try {
+      var r = await fetch('/api/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: title, message: message, position: state.cfg.position })
+      });
+      if (!r.ok) {
+        var j = await r.json().catch(function(){ return {}; });
+        throw new Error(j.error || ('HTTP ' + r.status));
+      }
+      say('已弹出，位置：' + (POS_SHORT[state.cfg.position] || state.cfg.position), 'ok');
+    } catch (e) {
+      say('弹出失败：' + e.message, 'err');
+    } finally {
+      if (btn) setTimeout(function(){ btn.disabled = false; btn.textContent = old; }, 700);
+    }
+  }
+
+  $('saveBtn').addEventListener('click', function(){ save(false); });
+
+  // 关掉浏览器标签页并不会结束进程，所以这里给一个明确的退出入口，
+  // 省得每次都要开任务管理器找 restreminder.exe 强杀。
+  $('quitBtn').addEventListener('click', async function(){
+    if (!confirm('确定退出提醒程序吗？\n\n退出后就不再提醒了，需要重新双击 restreminder.exe 才能恢复。')) return;
+    var btn = this;
+    btn.disabled = true;
+    btn.textContent = '正在退出…';
+    try {
+      await fetch('/api/shutdown', { method: 'POST' });
+      // 进程马上会消失，页面上的定时请求都会失败，所以先盖一层提示
+      var cover = document.createElement('div');
+      cover.style.cssText = 'position:fixed;inset:0;background:rgba(255,255,255,.95);z-index:999;' +
+        'display:flex;align-items:center;justify-content:center;text-align:center;color:#47515C';
+      cover.innerHTML =
+        '<div><div style="font-size:18px;font-weight:600;margin-bottom:10px">程序已退出</div>' +
+        '<div style="font-size:14px;line-height:1.9">提醒已经停止，现在可以关闭这个页面了。<br>' +
+        '<span style="color:#65707C;font-size:13px">需要恢复时，双击 restreminder.exe 即可。</span></div></div>';
+      document.body.appendChild(cover);
+    } catch (e) {
+      say('退出失败：' + e.message, 'err');
+      btn.disabled = false;
+      btn.textContent = '退出程序';
+    }
+  });
+
+  $('testBtn').addEventListener('click', function(){
+    popTest($('title').value.trim(), $('message').value.trim(), this);
+  });
+
+  $('addWin').addEventListener('click', function(){
+    state.cfg.windows.push({ start: '09:00', end: '11:00', interval: 60 });
+    renderWins();
+  });
+
+  $('enabled').addEventListener('change', function(){
+    $('enabledText').textContent = this.checked ? '已开启' : '已暂停';
+    state.cfg.enabled = this.checked;
+    save(true);
+  });
+
+  $('weekdaysOnly').addEventListener('change', function(){
+    state.cfg.weekdaysOnly = this.checked;
+    save(true);
+  });
+
+  // 开机启动要写注册表，可能失败（被安全软件拦、非 Windows），
+  // 失败就把开关拨回去，不能让页面显示「开了」而实际没开。
+  $('autoStart').addEventListener('change', async function(){
+    var el = this, want = el.checked, before = !!state.cfg.autoStart;
+    state.cfg.autoStart = want;
+    var ok = await save(true);
+    if (!ok) {
+      el.checked = before;
+      state.cfg.autoStart = before;
+      return;
+    }
+    say(want ? '已设置开机自动启动（下次登录 Windows 时生效）' : '已关闭开机自动启动', 'ok');
+  });
+
+  (async function init(){
+    try {
+      await loadConfig();
+      await loadStatus();
+      setInterval(renderStatus, 1000);
+      setInterval(renderRunMeta, 1000);
+      setInterval(loadStatus, 15000);
+    } catch (e) {
+      say('加载配置失败：' + e.message, 'err');
+    }
+  })();
+})();
+</script>
+</body>
+</html>
