@@ -105,8 +105,6 @@ const (
 
 	translucent = 1 // SetBkMode(TRANSPARENT)
 
-	autoCloseMs = 6000
-
 	// ---- 版式，全部是 96dpi 下的逻辑像素，实际尺寸乘 DPI 缩放 ----
 	cardW      = 340.0 // 卡片宽
 	cardH      = 96.0  // 卡片默认高度（实际按文字量自适应）
@@ -202,9 +200,10 @@ type blendFunction struct {
 }
 
 type popupReq struct {
-	title, msg string
-	position   string
-	done       chan error
+	title, msg  string
+	position    string
+	closeAfterS int // 停留秒数，<=0 用默认值
+	done        chan error
 }
 
 var (
@@ -241,17 +240,22 @@ func rgb(r, g, b uint32) uintptr {
 
 // notify 把请求丢给常驻的 UI 线程，等窗口创建成功就算发送完成（不等用户关闭）。
 // position 决定卡片停在工作区的哪个位置，空字符串等价于屏幕正中。
+// closeAfterS 是卡片停留几秒后自动关闭（<=0 时用默认值）。
 //
-// 如果上一条还在屏幕上，先把它关掉——否则新提醒要排队等 6 秒自动关闭，
+// 如果上一条还在屏幕上，先把它关掉——否则新提醒要排队等上一条自己消失，
 // 连点两次「试一下」就会觉得卡住。
-func notify(title, msg, position string) error {
+func notify(title, msg, position string, closeAfterS int) error {
 	uiOnce.Do(func() { go uiThread() })
 
 	if h := atomic.LoadUintptr(&curHwnd); h != 0 {
 		pPostMessageW.Call(h, wmClose, 0, 0)
 	}
 
-	req := popupReq{title: title, msg: msg, position: position, done: make(chan error, 1)}
+	req := popupReq{
+		title: title, msg: msg,
+		position: position, closeAfterS: closeAfterS,
+		done: make(chan error, 1),
+	}
 	select {
 	case uiCh <- req:
 	default:
@@ -278,7 +282,7 @@ func uiThread() {
 	registerClass()
 
 	for req := range uiCh {
-		req.done <- showPopup(req.title, req.msg, req.position)
+		req.done <- showPopup(req.title, req.msg, req.position, req.closeAfterS)
 		messageLoop() // 阻塞到窗口被销毁
 	}
 }
@@ -296,7 +300,7 @@ func registerClass() {
 	pRegisterClassExW.Call(uintptr(unsafe.Pointer(&wc)))
 }
 
-func showPopup(title, msg, position string) error {
+func showPopup(title, msg, position string, closeAfterS int) error {
 	curTitle, curMsg = title, msg
 	l := layoutFor(curScale, title, msg)
 
@@ -320,7 +324,13 @@ func showPopup(title, msg, position string) error {
 		return perr
 	}
 
-	pSetTimer.Call(hwnd, 1, autoCloseMs, 0)
+	// 停留时长由配置决定；<=0 时退回默认值（配置层 Normalize 已经兜过一层，
+	// 这里是给 -preview / 内部调用留的保险）。
+	ms := uintptr(closeAfterS) * 1000
+	if closeAfterS <= 0 {
+		ms = uintptr(defaultCloseAfter) * 1000
+	}
+	pSetTimer.Call(hwnd, 1, ms, 0)
 	atomic.StoreUintptr(&curHwnd, uintptr(hwnd))
 	pShowWindow.Call(hwnd, swShowNoActiv) // 不激活，不抢焦点
 	return nil

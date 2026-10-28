@@ -199,6 +199,13 @@ textarea{min-height:62px;line-height:1.55}
 .opt-txt{flex:1;min-width:0}
 .opt-name{font-size:13.5px}
 .opt-desc{font-size:12px;color:var(--muted);margin-top:2px;line-height:1.55}
+.num-wrap{display:flex;align-items:center;gap:7px;flex:0 0 auto}
+.num{
+  width:64px;font:inherit;font-size:13px;padding:6px 4px;text-align:center;
+  border:1px solid var(--border);border-radius:7px;background:#fff;color:var(--text);
+}
+.num:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+.num-unit{font-size:12.5px;color:var(--muted);white-space:nowrap}
 .hint{font-size:12px;color:var(--muted);margin-top:9px;line-height:1.6}
 
 /* ---- 弹窗 ---- */
@@ -335,6 +342,17 @@ textarea{min-height:62px;line-height:1.55}
         <div class="opt-desc" id="posDesc">屏幕正中</div>
       </div>
       <button class="btn sm" id="posBtn" type="button">设置…</button>
+    </div>
+
+    <div class="opt-row">
+      <div class="opt-txt">
+        <div class="opt-name">弹窗停留时间</div>
+        <div class="opt-desc">到点弹出的卡片显示多久后自动消失，1 ~ 300 秒；随时点卡片可以立即关闭</div>
+      </div>
+      <div class="num-wrap">
+        <input class="num" id="closeAfter" type="number" min="1" max="300" step="1" inputmode="numeric" aria-label="弹窗停留秒数">
+        <span class="num-unit">秒后关闭</span>
+      </div>
     </div>
   </section>
 
@@ -631,6 +649,7 @@ textarea{min-height:62px;line-height:1.55}
     $('message').value = c.message || '';
     $('weekdaysOnly').checked = !!c.weekdaysOnly;
     $('autoStart').checked = !!c.autoStart;
+    $('closeAfter').value = c.closeAfter || 6;
     if (!c.position) c.position = 'center';
     syncPosCells();
     renderWins();
@@ -644,6 +663,8 @@ textarea{min-height:62px;line-height:1.55}
     c.message = $('message').value.trim();
     c.weekdaysOnly = $('weekdaysOnly').checked;
     c.position = state.cfg.position || 'center';
+    var sec = parseInt($('closeAfter').value, 10);
+    c.closeAfter = (isNaN(sec) || sec < 1) ? 6 : sec;
     return c;
   }
 
@@ -784,6 +805,13 @@ textarea{min-height:62px;line-height:1.55}
       return;
     }
     say(want ? '已设置开机自动启动（下次登录 Windows 时生效）' : '已关闭开机自动启动', 'ok');
+  });
+
+  $('closeAfter').addEventListener('change', function(){
+    // 顺手把离谱的输入夹回来，省得保存时再弹一句错误
+    var n = parseInt(this.value, 10);
+    if (isNaN(n)) n = 6;
+    this.value = Math.max(1, Math.min(300, n));
   });
 
   (async function init(){

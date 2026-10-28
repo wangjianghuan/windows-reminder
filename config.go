@@ -18,6 +18,14 @@ const (
 
 	// 标题的字数上限。标题是单行且尾部省略，太长没意义。
 	maxTitleRunes = 40
+
+	// 弹窗自动关闭的默认秒数，也是老配置（没有 closeAfter 字段）的兜底值。
+	defaultCloseAfter = 6
+
+	// 自动关闭秒数的上下限。下限 1 秒：配 0 没有意义，只会让人以为没弹出来；
+	// 上限 5 分钟：再长就不叫「弹一下」了，关不掉会挡着屏幕。
+	minCloseAfter = 1
+	maxCloseAfter = 300
 )
 
 // 弹窗可以停靠的位置。都是相对「工作区」而言的（工作区已排除任务栏）。
@@ -72,6 +80,7 @@ type Config struct {
 	Title        string       `json:"title"`        // 默认通知标题，留空 = 弹窗不显示标题
 	Message      string       `json:"message"`      // 默认通知正文
 	Position     string       `json:"position"`     // 弹窗位置，见 PosXxx 常量
+	CloseAfter   int          `json:"closeAfter"`   // 弹窗停留几秒后自动关闭（秒）
 	Port         int          `json:"port"`         // 配置页面端口
 	Windows      []WorkWindow `json:"windows"`      // 工作时段列表
 }
@@ -85,6 +94,7 @@ func DefaultConfig() Config {
 		Title:        "该休息了",
 		Message:      "站起来活动一下，喝口水，看看窗外 20 秒。",
 		Position:     PosCenter,
+		CloseAfter:   defaultCloseAfter,
 		Port:         defaultPort,
 		Windows: []WorkWindow{
 			{Start: "09:00", End: "11:00", Interval: 60},
@@ -114,6 +124,11 @@ func (c *Config) Normalize() {
 	if !validPositions[c.Position] {
 		c.Position = PosCenter
 	}
+	// 老配置文件里没有 closeAfter 字段（解出来是 0），补成默认秒数；
+	// 页面传 0 或负数也按同一逻辑处理，不用弹一堆「不能是 0」的错误。
+	if c.CloseAfter <= 0 {
+		c.CloseAfter = defaultCloseAfter
+	}
 	// 标题故意不给默认值：留空就是「弹窗顶部不显示标题」，
 	// 有些人的提醒只要一句话就够，硬塞一个「该休息了」反而多余。
 	c.Title = strings.TrimSpace(c.Title)
@@ -133,6 +148,10 @@ func (c *Config) Normalize() {
 func (c Config) Validate() error {
 	if !validPositions[c.Position] {
 		return fmt.Errorf("弹窗位置「%s」无效", c.Position)
+	}
+	// 0 / 负数已经在 Normalize 里补成默认值了，这里只拦「长得离谱」的。
+	if c.CloseAfter > maxCloseAfter {
+		return fmt.Errorf("弹窗停留时间最多 %d 秒", maxCloseAfter)
 	}
 	if n := utf8.RuneCountInString(strings.TrimSpace(c.Title)); n > maxTitleRunes {
 		return fmt.Errorf("默认标题有 %d 个字，超过上限 %d 个字", n, maxTitleRunes)

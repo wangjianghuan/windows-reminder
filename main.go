@@ -162,7 +162,7 @@ func main() {
 		// 这里在桌面上弹一张卡片作为即时反馈，顺带验证弹窗通道本身是通的。
 		if cfg.Enabled {
 			if next, _, ok := NextReminder(cfg, time.Now()); ok {
-				if err := notify("提醒已启动", "下次提醒 "+next.Format("15:04"), cfg.Position); err != nil {
+				if err := notify("提醒已启动", "下次提醒 "+next.Format("15:04"), cfg.Position, cfg.CloseAfter); err != nil {
 					log.Printf("启动提示卡片没能弹出来：%v", err)
 				}
 			}
@@ -419,7 +419,7 @@ func handleTest(store *Store) http.HandlerFunc {
 			pos = cfg.Position
 		}
 
-		if err := notify(title, msg, pos); err != nil {
+		if err := notify(title, msg, pos, cfg.CloseAfter); err != nil {
 			log.Printf("测试通知失败：%v", err)
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return

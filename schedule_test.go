@@ -165,6 +165,33 @@ func TestNormalizeLegacyConfig(t *testing.T) {
 	if c.Windows == nil {
 		t.Fatal("Windows 应被初始化为空切片而非 nil")
 	}
+	// closeAfter 也是后加的字段，老配置解出来是 0，应补成默认 6 秒
+	if c.CloseAfter != defaultCloseAfter {
+		t.Fatalf("缺省停留秒数 = %d，期望 %d", c.CloseAfter, defaultCloseAfter)
+	}
+}
+
+// 弹窗停留秒数：0 / 负数补默认值，超上限报错，正常值原样保留。
+func TestCloseAfter(t *testing.T) {
+	for _, in := range []int{0, -3} {
+		c := Config{CloseAfter: in}
+		c.Normalize()
+		if c.CloseAfter != defaultCloseAfter {
+			t.Fatalf("Normalize(%d) = %d，期望 %d", in, c.CloseAfter, defaultCloseAfter)
+		}
+	}
+
+	c := Config{Title: "t", Message: "m", Position: PosCenter, Windows: []WorkWindow{}}
+	for _, sec := range []int{1, 6, 30, maxCloseAfter} {
+		c.CloseAfter = sec
+		if err := c.Validate(); err != nil {
+			t.Fatalf("停留 %d 秒不该报错：%v", sec, err)
+		}
+	}
+	c.CloseAfter = maxCloseAfter + 1
+	if err := c.Validate(); err == nil {
+		t.Fatalf("停留 %d 秒应被拒绝", c.CloseAfter)
+	}
 }
 
 // 间隔填 0 表示「仅一次」：只在时段开始那一刻提醒，之后到结束都不再提醒。
