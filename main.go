@@ -60,6 +60,7 @@ func main() {
 	scale := flag.Float64("scale", 1.0, "配合 -preview：按多少倍 DPI 渲染")
 	pvTitle := flag.String("preview-title", "", "配合 -preview：用指定的标题渲染")
 	pvNoTitle := flag.Bool("preview-no-title", false, "配合 -preview：渲染不带标题的卡片")
+	pvForce := flag.Bool("preview-force", false, "配合 -preview：渲染强制休息的卡片（底部带倒计时）")
 	flag.Parse()
 
 	if *silent {
@@ -93,7 +94,7 @@ func main() {
 		case *pvTitle != "":
 			title = *pvTitle
 		}
-		if err := writePreviewPNG(*preview, title, cfg.Message, *scale); err != nil {
+		if err := writePreviewPNG(*preview, title, cfg.Message, *scale, *pvForce); err != nil {
 			fatal("生成预览失败：%v", err)
 		}
 		log.Printf("已生成预览：%s", *preview)
@@ -160,9 +161,10 @@ func main() {
 
 		// 双击启动的人手里只有一个控制台窗口，很容易怀疑"到底跑起来没有"。
 		// 这里在桌面上弹一张卡片作为即时反馈，顺带验证弹窗通道本身是通的。
+		// 这张卡永远不强制休息——它只是告知"我起来了"，不该挡着人。
 		if cfg.Enabled {
 			if next, _, ok := NextReminder(cfg, time.Now()); ok {
-				if err := notify("提醒已启动", "下次提醒 "+next.Format("15:04"), cfg.Position, cfg.CloseAfter); err != nil {
+				if err := notify("提醒已启动", "下次提醒 "+next.Format("15:04"), cfg.Position, cfg.CloseAfter, false); err != nil {
 					log.Printf("启动提示卡片没能弹出来：%v", err)
 				}
 			}
@@ -307,6 +309,9 @@ func printTodaySchedule(cfg Config) {
 	}
 	log.Printf("今天的提醒时刻：%s", strings.Join(ss, "  "))
 	log.Printf("弹窗位置：%s", positionLabel(cfg.Position))
+	if cfg.ForceRest {
+		log.Printf("强制休息：开启，卡片会停留 %d 秒，期间点不掉也关不掉", cfg.CloseAfter)
+	}
 	if next, win, ok := NextReminder(cfg, time.Now()); ok {
 		log.Printf("下一次：%s → %s", next.Format("01-02 15:04"), win.ResolveMessage(cfg.Message))
 	}
@@ -419,7 +424,9 @@ func handleTest(store *Store) http.HandlerFunc {
 			pos = cfg.Position
 		}
 
-		if err := notify(title, msg, pos, cfg.CloseAfter); err != nil {
+		// 「试一下」按当前配置的真实行为弹：开了强制休息就真的关不掉，
+		// 否则用户永远看不到这个模式长什么样。想快速摆脱它，把时长调小再试。
+		if err := notify(title, msg, pos, cfg.CloseAfter, cfg.ForceRest); err != nil {
 			log.Printf("测试通知失败：%v", err)
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return

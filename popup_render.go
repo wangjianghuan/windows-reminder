@@ -48,13 +48,14 @@ func newLayout(s, cardHLogical float64) layout {
 // topPad 是正文顶部到卡片顶边的距离：有标题时正文要给标题让位（bodyTop），
 // 没标题时正文直接顶上去（titleTop）；minH 同理，没标题的卡片可以更矮一些，
 // 否则单行字会孤零零地悬在大卡片上半部分。
-func fitCardHeight(topPad, bodyLogical, minH float64) float64 {
-	h := topPad + bodyLogical + bodyBottomPad
+// extra 是正文下方额外要留的高度（强制休息的倒计时行），上下限都随之放宽。
+func fitCardHeight(topPad, bodyLogical, minH, extra float64) float64 {
+	h := topPad + bodyLogical + bodyBottomPad + extra
 	if h < minH {
 		h = minH
 	}
-	if h > maxCardH {
-		h = maxCardH
+	if h > maxCardH+extra {
+		h = maxCardH + extra
 	}
 	return h
 }

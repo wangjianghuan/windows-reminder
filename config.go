@@ -83,6 +83,10 @@ type Config struct {
 	CloseAfter   int          `json:"closeAfter"`   // 弹窗停留几秒后自动关闭（秒）
 	Port         int          `json:"port"`         // 配置页面端口
 	Windows      []WorkWindow `json:"windows"`      // 工作时段列表
+
+	// 强制休息：卡片在停留时间走完之前关不掉（点不掉、也不接受关闭消息），
+	// 并且每秒把自己重新抬回最上层，避免被别的置顶窗口盖住。
+	ForceRest bool `json:"forceRest"`
 }
 
 // DefaultConfig 对应需求：9 点起整点提醒，11 点后午休，

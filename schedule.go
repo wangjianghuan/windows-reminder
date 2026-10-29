@@ -180,7 +180,7 @@ func RunScheduler(store *Store) {
 			if now.Sub(next) <= catchUpWindow {
 				title := win.ResolveTitle(cfg.Title)
 				msg := win.ResolveMessage(cfg.Message)
-				if err := notify(title, msg, cfg.Position, cfg.CloseAfter); err != nil {
+				if err := notify(title, msg, cfg.Position, cfg.CloseAfter, cfg.ForceRest); err != nil {
 					log.Printf("通知发送失败：%v", err)
 				} else {
 					log.Printf("已提醒：%s（计划时刻 %s）", msg, next.Format("15:04"))

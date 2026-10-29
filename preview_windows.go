@@ -13,8 +13,12 @@ import (
 // writePreviewPNG 把一张示例卡片渲染成 PNG，全程不创建窗口。
 // 调版式时用它：改完 popup_render.go 里的常量，跑一次就能看到结果，
 // 不用等整点、也不用截图。
-func writePreviewPNG(path, title, body string, scale float64) error {
-	l := layoutFor(scale, title, body)
+func writePreviewPNG(path, title, body string, scale float64, force bool) error {
+	l := layoutFor(scale, title, body, force)
+	hint := ""
+	if force {
+		hint = countdownText(6) // 预览固定按 6 秒画，只看版式对不对
+	}
 
 	screen, _, _ := pGetDC.Call(0)
 	if screen == 0 {
@@ -50,7 +54,7 @@ func writePreviewPNG(path, title, body string, scale float64) error {
 	pix, alpha := l.render()
 	dst := unsafe.Slice((*byte)(bits), l.w*l.h*4)
 	copy(dst, pix)
-	drawTexts(mem, l, title, body)
+	drawTexts(mem, l, title, body, hint)
 
 	// 位图里是预乘 alpha 的 BGRA，PNG 要的是直通 alpha 的 RGBA，这里反预乘
 	img := image.NewNRGBA(image.Rect(0, 0, l.w, l.h))

@@ -347,12 +347,20 @@ textarea{min-height:62px;line-height:1.55}
     <div class="opt-row">
       <div class="opt-txt">
         <div class="opt-name">弹窗停留时间</div>
-        <div class="opt-desc">到点弹出的卡片显示多久后自动消失，1 ~ 300 秒；随时点卡片可以立即关闭</div>
+        <div class="opt-desc" id="closeAfterDesc">卡片显示多久后自动消失，1 ~ 300 秒；点一下卡片可以立即关闭</div>
       </div>
       <div class="num-wrap">
         <input class="num" id="closeAfter" type="number" min="1" max="300" step="1" inputmode="numeric" aria-label="弹窗停留秒数">
         <span class="num-unit">秒后关闭</span>
       </div>
+    </div>
+
+    <div class="opt-row">
+      <div class="opt-txt">
+        <div class="opt-name">强制休息</div>
+        <div class="opt-desc">卡片显示期间点不掉、也不会被别的窗口盖住，必须等停留时间走完才消失</div>
+      </div>
+      <label class="switch"><input type="checkbox" id="forceRest"><span class="track"></span></label>
     </div>
   </section>
 
@@ -649,7 +657,9 @@ textarea{min-height:62px;line-height:1.55}
     $('message').value = c.message || '';
     $('weekdaysOnly').checked = !!c.weekdaysOnly;
     $('autoStart').checked = !!c.autoStart;
+    $('forceRest').checked = !!c.forceRest;
     $('closeAfter').value = c.closeAfter || 6;
+    syncForceText();
     if (!c.position) c.position = 'center';
     syncPosCells();
     renderWins();
@@ -662,6 +672,7 @@ textarea{min-height:62px;line-height:1.55}
     c.title = $('title').value.trim();
     c.message = $('message').value.trim();
     c.weekdaysOnly = $('weekdaysOnly').checked;
+    c.forceRest = $('forceRest').checked;
     c.position = state.cfg.position || 'center';
     var sec = parseInt($('closeAfter').value, 10);
     c.closeAfter = (isNaN(sec) || sec < 1) ? 6 : sec;
@@ -699,6 +710,15 @@ textarea{min-height:62px;line-height:1.55}
 
   // 返回 true/false 而不是抛异常：调用方（开关、弹窗里的「应用」）需要知道
   // 到底存没存进去，好决定要不要把控件回滚。
+  // 「停留时间」的说明随强制休息切换：开着时它是「最少要待满多久」，
+  // 关着时它只是「看完多久自动收起来」。
+  function syncForceText(){
+    var on = $('forceRest').checked;
+    $('closeAfterDesc').textContent = on
+      ? '强制休息的时长，1 ~ 300 秒；这段时间内卡片关不掉，到点才自动消失'
+      : '卡片显示多久后自动消失，1 ~ 300 秒；点一下卡片可以立即关闭';
+  }
+
   async function save(silent){
     var c = collect();
     var btn = $('saveBtn');
@@ -805,6 +825,22 @@ textarea{min-height:62px;line-height:1.55}
       return;
     }
     say(want ? '已设置开机自动启动（下次登录 Windows 时生效）' : '已关闭开机自动启动', 'ok');
+  });
+
+  $('forceRest').addEventListener('change', async function(){
+    var el = this, want = el.checked, before = !!state.cfg.forceRest;
+    state.cfg.forceRest = want;
+    syncForceText();
+    var ok = await save(true);
+    if (!ok) {
+      el.checked = before;
+      state.cfg.forceRest = before;
+      syncForceText();
+      return;
+    }
+    var sec = $('closeAfter').value || 6;
+    say(want ? '已开启强制休息：卡片会停留满 ' + sec + ' 秒才消失，期间点不掉'
+             : '已关闭强制休息：卡片可以点掉，到时间也会自动消失', 'ok');
   });
 
   $('closeAfter').addEventListener('change', function(){

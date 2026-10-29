@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -191,6 +192,35 @@ func TestCloseAfter(t *testing.T) {
 	c.CloseAfter = maxCloseAfter + 1
 	if err := c.Validate(); err == nil {
 		t.Fatalf("停留 %d 秒应被拒绝", c.CloseAfter)
+	}
+}
+
+// 强制休息是纯布尔开关：老配置没有这个字段时必须是关闭的，
+// 打开后写盘再读回也要原样保住（不能和 closeAfter 互相干扰）。
+func TestForceRest(t *testing.T) {
+	legacy := Config{Title: "t", Message: "m"}
+	legacy.Normalize()
+	if legacy.ForceRest {
+		t.Fatal("老配置缺 forceRest 字段时应为 false")
+	}
+
+	on := Config{
+		Title: "t", Message: "m", Position: PosCenter,
+		CloseAfter: 60, ForceRest: true, Windows: []WorkWindow{},
+	}
+	data, err := json.Marshal(on)
+	if err != nil {
+		t.Fatalf("序列化失败：%v", err)
+	}
+	var back Config
+	if err := json.Unmarshal(data, &back); err != nil {
+		t.Fatalf("反序列化失败：%v", err)
+	}
+	if !back.ForceRest {
+		t.Fatalf("强制休息没有写进 JSON：%s", data)
+	}
+	if back.CloseAfter != 60 {
+		t.Fatalf("强制休息影响了停留时间：%d，期望 60", back.CloseAfter)
 	}
 }
 

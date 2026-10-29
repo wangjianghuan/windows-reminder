@@ -11,6 +11,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"syscall"
+	"time"
 	"unsafe"
 )
 
@@ -52,6 +53,7 @@ var (
 	pPostQuitMessage       = user32.NewProc("PostQuitMessage")
 	pSetTimer              = user32.NewProc("SetTimer")
 	pKillTimer             = user32.NewProc("KillTimer")
+	pSetWindowPos          = user32.NewProc("SetWindowPos")
 	pSystemParametersInfoW = user32.NewProc("SystemParametersInfoW")
 	pSetProcessDPIAware    = user32.NewProc("SetProcessDPIAware")
 	pUpdateLayeredWindow   = user32.NewProc("UpdateLayeredWindow")
@@ -86,6 +88,19 @@ const (
 	wmLButtonUp  = 0x0202
 	wmEraseBkgnd = 0x0014
 
+	// 程序自己换掉当前卡片时发的消息（WM_APP 起是应用自定义区）。
+	// 不能用 WM_CLOSE——强制休息期间那条消息是被无视的，连「试一下」都换不掉卡片。
+	wmSupersede = 0x8001
+
+	// 两个定时器：1 = 到点自动关闭；2 = 强制休息期间的心跳（刷倒计时 + 重申置顶）
+	timerClose = 1
+	timerTick  = 2
+
+	// SetWindowPos 的常用标志：只改 Z 序，不动位置尺寸、不抢焦点
+	swpNoSize     = 0x0001
+	swpNoMove     = 0x0002
+	swpNoActivate = 0x0010
+
 	wsPopup       = 0x80000000
 	wsExTopmost   = 0x00000008
 	wsExToolWnd   = 0x00000080 // 不出现在任务栏和 Alt+Tab
@@ -96,6 +111,7 @@ const (
 	logPixelsX    = 88 // GetDeviceCaps 的「每逻辑英寸水平像素」索引
 
 	dtLeft        = 0x0000
+	dtRight       = 0x0002
 	dtCenterV     = 0x0004
 	dtSingleLine  = 0x0020
 	dtNoPrefix    = 0x0800
@@ -128,6 +144,7 @@ const (
 	minCardH      = 76.0  // 卡片高度下限（标题 + 一行正文）
 	minCardHNoTtl = 52.0  // 没有标题时的下限：正文一行字，卡片可以矮一截
 	maxCardH      = 220.0 // 卡片高度上限（约 8 行，对应 maxContentRunes 字）
+	forceHintH    = 22.0  // 强制休息时卡片底部多出的一行倒计时提示
 )
 
 var (
@@ -202,7 +219,8 @@ type blendFunction struct {
 type popupReq struct {
 	title, msg  string
 	position    string
-	closeAfterS int // 停留秒数，<=0 用默认值
+	closeAfterS int  // 停留秒数，<=0 用默认值
+	force       bool // 强制休息：到点之前关不掉
 	done        chan error
 }
 
@@ -212,8 +230,16 @@ var (
 
 	className = utf16Ptr("XiaoBuRestReminderWnd")
 
+	// hwndTopmost 是 SetWindowPos 的 HWND_TOPMOST，也就是 -1。
+	hwndTopmost = ^uintptr(0)
+
 	// 只在 UI 线程内读写，无并发问题
 	curTitle, curMsg string
+	curCountdown     string    // 底部的「还剩 N 秒」，仅在强制休息时非空
+	curForce         bool      // 当前卡片是否处于强制休息
+	curDeadline      time.Time // 强制休息的结束时刻
+	curLayout        layout    // 重绘倒计时要用
+	curX, curY       int
 	curScale         = 1.0
 
 	// 当前正在显示的窗口句柄（0 表示没有）。跨 goroutine 访问，用原子操作。
@@ -241,19 +267,21 @@ func rgb(r, g, b uint32) uintptr {
 // notify 把请求丢给常驻的 UI 线程，等窗口创建成功就算发送完成（不等用户关闭）。
 // position 决定卡片停在工作区的哪个位置，空字符串等价于屏幕正中。
 // closeAfterS 是卡片停留几秒后自动关闭（<=0 时用默认值）。
+// force 为 true 时进入强制休息：卡片在倒计时走完前点不掉、也不会被盖住。
 //
-// 如果上一条还在屏幕上，先把它关掉——否则新提醒要排队等上一条自己消失，
-// 连点两次「试一下」就会觉得卡住。
-func notify(title, msg, position string, closeAfterS int) error {
+// 如果上一条还在屏幕上，先把它换掉——否则新提醒要排队等上一条自己消失，
+// 连点两次「试一下」就会觉得卡住。这里发的是自定义的 wmSupersede，
+// 因为 WM_CLOSE 在强制休息期间是被无视的。
+func notify(title, msg, position string, closeAfterS int, force bool) error {
 	uiOnce.Do(func() { go uiThread() })
 
 	if h := atomic.LoadUintptr(&curHwnd); h != 0 {
-		pPostMessageW.Call(h, wmClose, 0, 0)
+		pPostMessageW.Call(h, wmSupersede, 0, 0)
 	}
 
 	req := popupReq{
 		title: title, msg: msg,
-		position: position, closeAfterS: closeAfterS,
+		position: position, closeAfterS: closeAfterS, force: force,
 		done: make(chan error, 1),
 	}
 	select {
@@ -282,7 +310,7 @@ func uiThread() {
 	registerClass()
 
 	for req := range uiCh {
-		req.done <- showPopup(req.title, req.msg, req.position, req.closeAfterS)
+		req.done <- showPopup(req.title, req.msg, req.position, req.closeAfterS, req.force)
 		messageLoop() // 阻塞到窗口被销毁
 	}
 }
@@ -300,9 +328,23 @@ func registerClass() {
 	pRegisterClassExW.Call(uintptr(unsafe.Pointer(&wc)))
 }
 
-func showPopup(title, msg, position string, closeAfterS int) error {
+func showPopup(title, msg, position string, closeAfterS int, force bool) error {
+	// 停留时长由配置决定；<=0 时退回默认值（配置层 Normalize 已经兜过一层，
+	// 这里是给 -preview / 内部调用留的保险）。
+	if closeAfterS <= 0 {
+		closeAfterS = defaultCloseAfter
+	}
+
 	curTitle, curMsg = title, msg
-	l := layoutFor(curScale, title, msg)
+	curForce = force
+	if force {
+		curDeadline = time.Now().Add(time.Duration(closeAfterS) * time.Second)
+		curCountdown = countdownText(closeAfterS)
+	} else {
+		curCountdown = ""
+	}
+
+	l := layoutFor(curScale, title, msg, force)
 
 	hwnd, _, err := pCreateWindowExW.Call(
 		wsExTopmost|wsExToolWnd|wsExNoActive|wsExLayered,
@@ -318,22 +360,54 @@ func showPopup(title, msg, position string, closeAfterS int) error {
 	handle := syscall.Handle(hwnd)
 
 	x, y := anchorPos(l, position)
+	curLayout, curX, curY = l, x, y
 
-	if perr := paint(handle, l, x, y); perr != nil {
+	if perr := paint(handle, l, x, y, true); perr != nil {
 		pDestroyWindow.Call(hwnd)
 		return perr
 	}
 
-	// 停留时长由配置决定；<=0 时退回默认值（配置层 Normalize 已经兜过一层，
-	// 这里是给 -preview / 内部调用留的保险）。
-	ms := uintptr(closeAfterS) * 1000
-	if closeAfterS <= 0 {
-		ms = uintptr(defaultCloseAfter) * 1000
+	pSetTimer.Call(hwnd, timerClose, uintptr(closeAfterS)*1000, 0)
+	if force {
+		// 500ms 一跳而不是 1000ms：心跳和关闭定时器各走各的，相位不固定，
+		// 1 秒一跳会出现「刚跳到 1 就关了」这种少显示一秒的错觉。
+		pSetTimer.Call(hwnd, timerTick, 500, 0)
 	}
-	pSetTimer.Call(hwnd, 1, ms, 0)
 	atomic.StoreUintptr(&curHwnd, uintptr(hwnd))
 	pShowWindow.Call(hwnd, swShowNoActiv) // 不激活，不抢焦点
 	return nil
+}
+
+// countdownText 是强制休息卡片底部那行提示。写清楚「还剩几秒」，
+// 用户才知道这不是卡住了，而是真的关不掉。
+func countdownText(sec int) string {
+	if sec < 0 {
+		sec = 0
+	}
+	return fmt.Sprintf("强制休息 · 还剩 %d 秒", sec)
+}
+
+// refreshForce 是强制休息期间的心跳：刷新倒计时，并把窗口重新抬到最上层。
+//
+// 为什么要反复抬：WS_EX_TOPMOST 只保证在「非置顶窗口」之上，同样标了置顶的窗口
+// （某些悬浮球、播放器全屏、输入法工具条）后出现时照样能盖住它。
+// 每秒重新 SetWindowPos(HWND_TOPMOST) 会把自己挪回置顶组的第一位，
+// 且带 SWP_NOACTIVATE，不会抢走你正在打字的焦点。
+func refreshForce(hwnd syscall.Handle) {
+	if !curForce {
+		return
+	}
+	left := int(math.Ceil(time.Until(curDeadline).Seconds()))
+	if left < 0 {
+		left = 0
+	}
+	if s := countdownText(left); s != curCountdown {
+		curCountdown = s
+		if err := paint(hwnd, curLayout, curX, curY, false); err != nil {
+			log.Printf("刷新倒计时失败：%v", err)
+		}
+	}
+	pSetWindowPos.Call(uintptr(hwnd), hwndTopmost, 0, 0, 0, 0, swpNoMove|swpNoSize|swpNoActivate)
 }
 
 // anchorPos 按配置的锚点算出位图左上角的屏幕坐标。
@@ -383,7 +457,8 @@ func anchorPos(l layout, position string) (int, int) {
 }
 
 // paint 把整张卡片渲染进 32 位 DIB，再用 UpdateLayeredWindow 贴到屏幕上。
-func paint(hwnd syscall.Handle, l layout, x, y int) error {
+// verbose 只控制要不要打那行尺寸日志：首帧打，逐秒刷新倒计时时不打。
+func paint(hwnd syscall.Handle, l layout, x, y int, verbose bool) error {
 	screen, _, _ := pGetDC.Call(0)
 	if screen == 0 {
 		return fmt.Errorf("获取屏幕 DC 失败")
@@ -421,9 +496,12 @@ func paint(hwnd syscall.Handle, l layout, x, y int) error {
 	copy(dst, pix)
 
 	// 2. 文字交给 GDI（小字号下 ClearType 最清晰）
-	th, bh := drawTexts(mem, l, curTitle, curMsg)
-	log.Printf("[draw] 位图=%dx%d 卡片=%dx%d 标题高=%d 正文高=%d 缩放=%.2f",
-		l.w, l.h, int(l.cardW), int(l.cardH), th, bh, l.scale)
+	th, bh := drawTexts(mem, l, curTitle, curMsg, curCountdown)
+	if verbose {
+		// 每秒刷倒计时时不再打这行，否则强制休息 5 分钟能刷 300 行日志
+		log.Printf("[draw] 位图=%dx%d 卡片=%dx%d 标题高=%d 正文高=%d 缩放=%.2f 强制=%v",
+			l.w, l.h, int(l.cardW), int(l.cardH), th, bh, l.scale, curForce)
+	}
 
 	// 3. GDI 写像素时不维护 alpha 通道，会把它清成 0，这里按算好的覆盖率回填。
 	//    文字只落在不透明的卡片内部，所以整体回填是安全的。
@@ -445,7 +523,7 @@ func paint(hwnd syscall.Handle, l layout, x, y int) error {
 	return nil
 }
 
-func drawTexts(hdc uintptr, l layout, title, body string) (int32, int32) {
+func drawTexts(hdc uintptr, l layout, title, body, hint string) (int32, int32) {
 	pSetBkMode.Call(hdc, translucent)
 
 	// 标题：没填就整块跳过，正文会顶上来到 titleTop 的位置（见 layoutFor）
@@ -465,7 +543,11 @@ func drawTexts(hdc uintptr, l layout, title, body string) (int32, int32) {
 		pDeleteObject.Call(titleFont)
 	}
 
-	// 正文（自动换行）
+	// 正文（自动换行）。强制休息时底部要留出倒计时那一行。
+	bodyBottom := l.cardH/l.scale - bodyBottomPad
+	if hint != "" {
+		bodyBottom -= forceHintH
+	}
 	bodyFont := makeFont(-13, 400, l.scale)
 	old, _, _ := pSelectObject.Call(hdc, bodyFont)
 	pSetTextColor.Call(hdc, rgb(0x6B, 0x72, 0x80))
@@ -473,11 +555,28 @@ func drawTexts(hdc uintptr, l layout, title, body string) (int32, int32) {
 		left:   l.px(textLeft),
 		top:    l.py(bodyTopOf(title)),
 		right:  l.px(textRight),
-		bottom: l.py(l.cardH/l.scale - bodyBottomPad),
+		bottom: l.py(bodyBottom),
 	}
 	bh, _ := drawText(hdc, body, &r, dtLeft|dtWordBreak|dtNoPrefix)
 	pSelectObject.Call(hdc, old)
 	pDeleteObject.Call(bodyFont)
+
+	// 底部倒计时：右对齐的浅灰小字。只画字，不加底色——
+	// 卡片本身已经很干净，多一块色块反而像出错提示。
+	if hint != "" {
+		hintFont := makeFont(-11, 400, l.scale)
+		old, _, _ := pSelectObject.Call(hdc, hintFont)
+		pSetTextColor.Call(hdc, rgb(0x93, 0x9C, 0xA9))
+		hr := smallRect{
+			left:   l.px(textLeft),
+			top:    l.py(l.cardH/l.scale - forceHintH + 2),
+			right:  l.px(textRight),
+			bottom: l.py(l.cardH/l.scale - 4),
+		}
+		drawText(hdc, hint, &hr, dtRight|dtCenterV|dtSingleLine|dtNoPrefix)
+		pSelectObject.Call(hdc, old)
+		pDeleteObject.Call(hintFont)
+	}
 
 	return th, bh
 }
@@ -493,7 +592,8 @@ func bodyTopOf(title string) float64 {
 // layoutFor 先量出正文实际占多高，再决定卡片高度：
 // 一行字的卡片矮一点，长文案才变高，避免短文案下面挂一大片白。
 // 标题为空时不再预留标题那一行，卡片整体会更矮更紧凑。
-func layoutFor(scale float64, title, msg string) layout {
+// force 为 true 时底部多留一行倒计时，卡片相应长高 forceHintH。
+func layoutFor(scale float64, title, msg string, force bool) layout {
 	textWidth := (textRight - textLeft) * scale
 	bodyH := float64(measureBody(scale, msg, textWidth)) / scale
 	if bodyH <= 0 {
@@ -503,7 +603,12 @@ func layoutFor(scale float64, title, msg string) layout {
 	if strings.TrimSpace(title) == "" {
 		minH = minCardHNoTtl
 	}
-	return newLayout(scale, fitCardHeight(bodyTopOf(title), bodyH, minH))
+	extra := 0.0
+	if force {
+		extra = forceHintH
+		minH += extra
+	}
+	return newLayout(scale, fitCardHeight(bodyTopOf(title), bodyH, minH, extra))
 }
 
 // measureBody 用 DT_CALCRECT 让 GDI 在给定宽度下算出正文需要多高。
@@ -593,16 +698,41 @@ func wndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintptr {
 		return 1 // 背景自己画，避免闪烁
 
 	case wmTimer:
-		pKillTimer.Call(uintptr(hwnd), 1)
+		switch wParam {
+		case timerTick:
+			// 强制休息的心跳：刷倒计时 + 重申置顶
+			refreshForce(hwnd)
+		default:
+			pKillTimer.Call(uintptr(hwnd), timerClose)
+			pKillTimer.Call(uintptr(hwnd), timerTick)
+			pDestroyWindow.Call(uintptr(hwnd))
+		}
+		return 0
+
+	case wmLButtonUp:
+		// 强制休息期间点不掉：只能等倒计时走完。
+		if curForce {
+			return 0
+		}
 		pDestroyWindow.Call(uintptr(hwnd))
 		return 0
 
-	case wmLButtonUp, wmClose:
+	case wmClose:
+		// 同上。这里包括用户从任务管理器之类的地方发来的关闭请求；
+		// 程序自己要换卡片走的是 wmSupersede，不经过这条分支。
+		if curForce {
+			return 0
+		}
+		pDestroyWindow.Call(uintptr(hwnd))
+		return 0
+
+	case wmSupersede:
 		pDestroyWindow.Call(uintptr(hwnd))
 		return 0
 
 	case wmDestroy:
 		atomic.StoreUintptr(&curHwnd, 0)
+		curForce, curCountdown = false, ""
 		pPostQuitMessage.Call(0)
 		return 0
 	}
